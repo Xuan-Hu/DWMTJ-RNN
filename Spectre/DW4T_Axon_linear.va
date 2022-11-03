@@ -1,0 +1,148 @@
+// VerilogA for 8V70_DWNeuron_Model_1, DW_basic_1, veriloga
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+//-------------------------------------Define a discipline to generate non-electrical outputs for data observation
+nature distance 
+  access = Metr;
+  units = "m";
+  abstol = 0.01n;
+endnature
+ 
+discipline Distance
+  potential distance;
+enddiscipline
+//-------------------------------------Define a discipline to generate non-electrical outputs for data observation END
+module DW4T_Axon_linear(Input, InputN, Up, Down, RMTJ, PDW);		//Define module name and ports
+
+inout Input, InputN, Up, Down;								//Ports defined as IN-OUT
+
+electrical Input, InputN, Up, Down;							//Both voltage and current are associated with these ports
+
+Distance RMTJ;										//As defined before, Distance is for data observation
+Distance PDW;
+
+//------------------------------------Parameter initialization
+parameter real MTJ_Placement = 0.5;					//The MTJ placement related to the DW track, default 0.9 as the MTJ center is located at 90% of the DW track
+parameter real DW_Track_Resistance = 2k;			//The resistance across the entire DW track, can be used to define the input resistance (R_input-down)
+parameter real Rp = 20k;							//MTJ parallel state resistance
+parameter real Rap = 60k;							//MTJ anti-parallel state resistance
+
+parameter real Ith = 0.8e-6;							//Input current threshold value
+
+parameter real MTJ_Width = 20e-9;					//X-axis width of the MTJ, default 20nm
+parameter real DW_Length = 100e-9;					//X-axis DW track length, default 200nm
+parameter real DW_Velocity = 25;					//DW velocity, default 25m/s, the fixed DW velocity can be replaced by equations if necessary
+
+parameter real time_step = 1e-12; 					//Simulation time interval, default 1ps, need to be adjust matching the simulator setting
+
+parameter real DW_V_leak = 0;
+
+//------------physical constant
+parameter real g = 2.1;		//Lande factor
+parameter real Pol = 0.7;	//polarization
+parameter real uB = 9.274e-24;	//Bohr
+parameter real e = 1.602e-19;
+parameter real Msat = 800e3;	//Msat
+
+parameter real DW_Width = 10e-9;
+parameter real DW_Thickness = 5e-9;
+
+parameter string SFloca = "/home/013/c/cb/cbd170000/ibm130_ic-6/fin2/py3_linearLeakingAsyncPowerLowV/";
+parameter string SFname = "a.sp";
+//------------------------------------Parameter initialization END
+
+
+//------------------------------------Variable initialization
+real RDW_Left;										//The resistance of DW track left part (from Input to MTJ left edge)
+real RDW_Right;										//The resistance of DW track right part (from MTJ right edge to DW track end)
+	
+real DW_Position;									//DW position within the track
+
+real MTJ_L;											//The left edge of the MTJ
+real MTJ_R;											//The right edge of the MTJ
+real Req;											//Equivalent MTJ resistance
+
+real I_in;											//Input current value
+
+real V_factor;										//velocity constant for DW 
+
+real J_in;			//input current density
+real Area;			//DW track side area
+
+real DW_V;
+real counter;
+
+integer file_pointer;
+string FileLong;
+real powUse;
+//------------------------------------Variable initialization END
+
+
+
+analog 
+begin
+	@(initial_step)									//Model initialization
+	begin	
+		RDW_Left = MTJ_Placement * DW_Track_Resistance;						//Calculate DW left resistance, as defined before
+		RDW_Right = (1 - MTJ_Placement) * DW_Track_Resistance;				//Calculate DW right resistance, as defined before
+
+		MTJ_L = (MTJ_Placement * DW_Length) - (0.5 * MTJ_Width);			//Calculate where the MTJ left edge is
+		MTJ_R = (MTJ_Placement * DW_Length) + (0.5 * MTJ_Width);			//Calculate where the MTJ right edge is
+
+		DW_Position = 0;													//DW-related value initialization
+
+		V_factor = (g * Pol * uB)/(2 * e * Msat);							//velocity factor
+
+		Area = DW_Width * DW_Thickness;		
+		FileLong = {SFloca,SFname};
+		file_pointer = $fopen(FileLong);
+		counter=0;
+	end
+
+	I_in = I(Input, InputN);													//Convert node-to-node current value to a variable
+	J_in = I_in / Area;
+	DW_V = (J_in * V_factor) + DW_V_leak;
+
+	DW_Position = DW_Position + DW_V * time_step;
+			
+	if(DW_Position > DW_Length)
+	begin
+			DW_Position = DW_Length;
+	end
+	if(DW_Position < 0)
+	begin
+		DW_Position = 0;
+	end	
+
+	if(DW_Position <= MTJ_L && DW_Position >=0)								//The DW is located to the left of MTJ, resulting parallel state
+	begin
+		Req = Rap;
+	end
+	else if(DW_Position >= MTJ_R && DW_Position <= DW_Length)				//The DW is located to the right of MTJ, resulting anti-parallel state
+	begin
+		Req = Rp;
+	end
+	else
+	begin
+		Req = ((MTJ_R - MTJ_L) * Rp * Rap) / ((Rap * (DW_Position - MTJ_L)) + ( Rp * (MTJ_R - DW_Position)));		//DW is located beneath the MTJ, using a transition equation
+	end
+
+//I(Input, Down) <+ V(Input, Down) / RDW_Left;								//Electrical output assignments
+I(Input, InputN) <+ V(Input, InputN) / DW_Track_Resistance;
+I(Up, Down) <+ V(Up, Down) / Req;
+
+Metr(RMTJ) <+ DW_V;															//Non-electrical output assignments
+Metr(PDW) <+ DW_Position;
+
+if(counter%1000==1)
+begin
+	powUse = (V(Input, InputN) * I(Input, InputN)) + (V(Up,Down) * I(Up,Down));
+	$fwrite(file_pointer,"%g\n",powUse);
+	$fclose(file_pointer);
+end
+counter =counter+1;
+
+end
+endmodule

@@ -1,0 +1,22 @@
+// VerilogA for 8V70_TEDCNT3, switch3, veriloga
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module switch3 (CTRLP, CTRLN, SIGP, SIGN);
+
+    parameter real thresh=0;	// threshold (V)
+	parameter real Ron = 0.000001;
+	parameter real Roff = 10T;
+
+    inout CTRLP, CTRLN, SIGP, SIGN;
+    electrical CTRLP, CTRLN, SIGP, SIGN;
+
+    analog begin
+	@(cross( V(CTRLP,CTRLN) -thresh, 0 ));
+	if (V(CTRLP,CTRLN) > thresh)
+		V(SIGP, SIGN) <+ Ron * I(SIGP, SIGN);
+	else
+		I(SIGP,SIGN) <+ V(SIGP, SIGN)/Roff;
+    end
+endmodule
